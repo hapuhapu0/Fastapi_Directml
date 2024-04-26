@@ -17,7 +17,7 @@ def setmodel() -> None:
     print(a)
 
 def getProvider() -> None:
-    a = requests.request("get", "http://127.0.0.1:8000/getproviders").text
+    a = requests.request("get", "http://127.0.0.1:8000/getProviders").text
     print(a)
 
 def main() -> None:
