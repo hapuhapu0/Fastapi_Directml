@@ -1,5 +1,5 @@
 ﻿model := "best.onnx"
-capturePos := "[0, 0, 1000, 1000]"
+capturePos := "[0, 0, 1800, 1000]"
 Tscore := 0.8
 
 Find := new Detect()
@@ -21,9 +21,12 @@ ExitApp
 Exit
 
 class Detect {
+    static host := "127.0.0.1"
+    static port := 8000
+
     __New(Path := "main.exe", SleepTime := 5000) {
-        run, % Path,,Hide,PID
-        sleep, % SleepTime
+        ; run, % Path " --host " host " --port " port,,Hide,PID
+        ; sleep, % SleepTime
         this.wh := ComObjCreate("WinHTTP.WinHTTPRequest.5.1")
     }
 

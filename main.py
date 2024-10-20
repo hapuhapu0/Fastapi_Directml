@@ -10,6 +10,7 @@ import onnxruntime as ort
 import numpy as np
 import cv2
 import base64
+import argparse
 
 import win32gui
 import win32ui
@@ -29,11 +30,14 @@ class DetectImage:
         self.trainModel = None
         self.Provider = None
 
+        self.input_width = 640
+        self.input_height = 640
+
         # Error message
         # Model not loaded
         self.error_ModelNotLoad = "Model not Loaded"
 
-async def captureScreen(Pos: tuple, GrayScale: bool = True) -> np.ndarray:
+def captureScreen(Pos: tuple, GrayScale: bool = True) -> np.ndarray:
     try:
         width = Pos[2] - Pos[0]
         height = Pos[3] - Pos[1]
@@ -65,7 +69,7 @@ async def captureScreen(Pos: tuple, GrayScale: bool = True) -> np.ndarray:
         cDC.DeleteDC()
         win32gui.DeleteObject(dataBitMap.GetHandle())
 
-async def addPadding(Image: np.ndarray) -> np.ndarray:
+def addPadding(Image: np.ndarray) -> np.ndarray:
     height, width = Image.shape[:2]
 
     margin = [np.abs(height - width) // 2, np.abs(height - width) // 2]
@@ -84,40 +88,47 @@ async def addPadding(Image: np.ndarray) -> np.ndarray:
     output = np.pad(Image, margin_list, mode='constant')
     return output
     
-async def preProcess(image: base64.b64encode) -> np.ndarray:
+def preProcess(image: base64.b64encode) -> np.ndarray:
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image = await addPadding(image)
+    image = addPadding(image)
     image = cv2.resize(image, dsize=(640, 640))
     image_data = np.array(image) / 255.0
     image_data = np.transpose(image_data, (2, 0, 1))
     image_data = np.expand_dims(image_data, axis=0).astype(np.float32)
     return image_data
 
-async def postProcess(result: list, Tscore: float, shape: list) -> np.ndarray:
-    obj = result[0][0]
-    x1, y1, x2, y2, scores = obj
-    
-    if len(scores) > 0:
-        max_score = np.max(scores)
-    else:
-        max_score = 0
-    
-    if max_score > Tscore:
-        detected_objects = []
-        
-        scale_x = shape[1] / 640
-        scale_y = shape[0] / 640
-        
-        for i in range(len(scores)):
-            if scores[i] > Tscore:
-                scaled_x = round(x1[i] * scale_x)
-                scaled_y = round(y1[i] * scale_y)
-                
-                detected_objects.append([scaled_x, scaled_y])
-        
-        return detected_objects
-    
-    return []
+def postProcess(result: list, Tscore: float, shape: list) -> np.ndarray:
+    outputs = np.transpose(np.squeeze(result[0]))
+    rows = outputs.shape[0]
+
+    detected_objects = []
+
+    x_factor = shape[0] / Detect.input_width
+    y_factor = shape[1] / Detect.input_height
+
+    for i in range(rows):
+        classes_scores = outputs[i][4:]
+
+        max_score = np.amax(classes_scores)
+
+        if (max_score >= Tscore):
+            class_id = np.argmax(classes_scores)
+            x, y, w, h = outputs[i][0], outputs[i][1], outputs[i][2], outputs[i][3]
+
+            left = int((x - w / 2) * x_factor)
+            top = int((y - h / 2) * y_factor)
+            width = int(w * x_factor)
+            height = int(h * y_factor)
+            
+            detected_objects.append(
+                {
+                    "Pos": [left, top, left + width, top + height],
+                    "class_id": int(class_id),
+                    "score": round(float(max_score), 5)
+                }
+            )
+            
+    return detected_objects
 
 app = FastAPI()
 Detect = DetectImage()
@@ -133,13 +144,13 @@ async def detectImage(
             return Detect.error_ModelNotLoad
         else:
             Tscore = float(Tscore)
-            ScreenImage = await captureScreen(capturePos, False)
-            w, h, _ = ScreenImage.shape
+            ScreenImage = captureScreen(capturePos, False)
+            h, w, _ = ScreenImage.shape
 
-            ScreenImage = await preProcess(ScreenImage)
+            ScreenImage = preProcess(ScreenImage)
 
             output = Detect.trainModel.run(None, {"images": ScreenImage})
-            result = await postProcess(output, Tscore, [w, h])
+            result = postProcess(output, Tscore, [w, h])
             
             return result
     except Exception as e:
@@ -153,6 +164,12 @@ async def setmodel(model: Annotated[str | None, Header()], Provider: Annotated[s
             Detect.trainModel = ort.InferenceSession(model, providers=ort.get_available_providers())
         else:
             Detect.trainModel = ort.InferenceSession(model, providers=Provider)
+
+        model_inputs = Detect.trainModel.get_inputs()
+        input_shape = model_inputs[0].shape
+
+        Detect.input_width = input_shape[2]
+        Detect.input_height = input_shape[3]
         return True
     
     except Exception as e:
@@ -165,10 +182,18 @@ async def getProviders():
     
     except Exception as e:
         return e
+    
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='FastAPI Server with configurable IP and Port')
+    parser.add_argument('--host', type=str, default='127.0.0.1', help='IP address to bind (default: 127.0.0.1)')
+    parser.add_argument('--port', type=int, default=8000, help='Port to bind (default: 8000)')
+    return parser.parse_args()
 
 def main() -> None:
+    args = parse_arguments()
     multiprocessing.freeze_support()
-    uvicorn.run(app)
+    uvicorn.run(app, host=args.host, port=args.port)
 
 if (__name__ == "__main__"):
     main()
